@@ -1,0 +1,8 @@
+INVISA
+========
+
+Yet another open source VISA implementation (the instrument API, no money or government documentation involved).
+
+Build with mingw32-make or mingw64-make.
+
+MIT licensed.

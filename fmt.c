@@ -967,7 +967,65 @@ rawscan(Fmt *f, char fmtch)
 			if(f->widthp != nil) (*f->widthp)++;
 		}
 	}
+}
 
+static void
+clsscan(Fmt *f, char fmtch)
+{
+	ViUInt32 map[256/32];
+	int invert, i, c, max;
+	char *p;
+
+	if((f->flags & ~(FMTSTAR|FMTWIDTH)) != 0)
+		longjmp(f->errbuf, VI_ERROR_INV_FMT);	
+	if(f->widthp != nil) *f->widthp = 0;
+	memset(map, 0, sizeof(map));
+	invert = 0;
+	f->fmt++;
+	if(*f->fmt == '^'){
+		invert = 1;
+		f->fmt++;
+	}
+	if(*f->fmt == ']'){
+		map[((ViByte)*f->fmt)>>5] |= 1<<(*f->fmt&31);
+		f->fmt++;
+	}
+	while(*f->fmt != ']'){
+		if(*f->fmt == 0)
+			longjmp(f->errbuf, VI_ERROR_INV_FMT);
+		if(f->fmt[1] == '-' && f->fmt[2] != ']'){
+			if(f->fmt[2] == 0)
+				longjmp(f->errbuf, VI_ERROR_INV_FMT);
+			for(i = (ViByte)f->fmt[0]; i < (ViByte)f->fmt[2]; i++)
+				map[i>>5] |= 1<<(i & 31);
+			f->fmt += 3;
+			continue;
+		}
+		map[((ViByte)*f->fmt)>>5] |= 1<<(*f->fmt&31);
+		f->fmt++;
+	}
+	if(invert)
+		for(i = 0; i < 256/32; i++)
+			map[i] ^= -1;
+	if((f->flags & FMTSTAR) != 0)
+		max = 0;
+	else if((f->flags & FMTWIDTH) != 0)
+		max = f->width;
+	else
+		max = 0x7fffffff;
+	if((f->flags & FMTSTAR) != 0)
+		p = nil;
+	else
+		p = va_arg(f->va, char *);
+	if(max > 0) *p = 0;
+	for(i = 0; c = scangetc(f), c >= 0 && (map[c>>5] & 1<<(c&31)) != 0; i++){
+		if(i < max - 1){
+			*p++ = c;
+			*p = 0;
+			if(f->widthp != nil) (*f->widthp)++;
+		}
+	}
+	scanungetc(f);
 }
 
 static void (*scantab[128])(Fmt *, char) = {
@@ -978,6 +1036,7 @@ static void (*scantab[128])(Fmt *, char) = {
 	['d'] = numscan, ['f'] = numscan, ['e'] = numscan, ['E'] = numscan, ['g'] = numscan, ['G'] = numscan,
 	['b'] = binscan,
 	['y'] = rawscan,
+	['['] = clsscan,
 };
 
 static ViStatus

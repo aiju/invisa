@@ -795,7 +795,6 @@ nope:			scanungetc(f);
 	#undef accept
 	scanungetc(f);
 	*p = 0;
-	printf(">%s<\n", buf);
 	if((f->flags & FMTll) != 0 && !efmt && !cfmt){
 		val = strtoll(buf, nil, 0);
 		if(tp != nil){
@@ -1069,6 +1068,8 @@ scango(Fmt *f)
 		scantab[(int)*f->fmt](f, *f->fmt);
 		f->fmt++;
 	}
+	if(f->lastrc < 0)
+		return f->lastrc;
 	return VI_SUCCESS;
 }
 

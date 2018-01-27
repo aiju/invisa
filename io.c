@@ -383,7 +383,6 @@ iobufread(Session *p, void *buf, ViUInt32 n, ViUInt32 *retc)
 	int rc, rv, r, m;
 	int i;
 	int term;
-	char c;
 
 	if(p->tab->rawread == nil)
 		return VI_ERROR_NSUP_OPER;
@@ -421,12 +420,14 @@ iobufread(Session *p, void *buf, ViUInt32 n, ViUInt32 *retc)
 				if(rc != VI_SUCCESS_MAX_CNT)
 					b->end = rc;
 				rc = VI_SUCCESS;
+				break;
 			}
 		}
-		r += m;
-		b->rd += m;
+		r += i;
+		b->rd += i;
 	}
-	if(retc != NULL)
+	printf("returning %d bytes from bufread (term=%d)\n", (int)r, term);
+	if(retc != nil)
 		*retc = r;
 	if(r == n && rc < 0){
 		b->end = rc;

@@ -6,9 +6,11 @@ int nsesstab;
 RWLock sesslock;
 enum { SESSBLOCK = 64 };
 
-extern const OpTab tcpiptab;
+extern const OpTab tcpipsockettab;
+extern const OpTab gpibintfctab;
 const OpTab *optabs[] = {
-	&tcpiptab,
+	&tcpipsockettab,
+	&gpibintfctab,
 	nil
 };
 
@@ -74,10 +76,12 @@ newattrx(Session *p, ViAttr attr, int flags, ViAttrState in, ViStatus (*get)(Ses
 {
 	Attr *a;
 	
+	if((flags & ATIFUNDEF) != 0 && (a = getattr(p, attr, 0), a != nil))
+		return a;
 	a = getattr(p, attr, 1);
 	if(a == nil)
 		return nil;
-	a->flags = flags;
+	a->flags = flags & ~(ATIFUNDEF|ATCALLSET);
 	a->get = get;
 	a->set = set;
 	switch(flags & ATTYPE){
@@ -88,6 +92,8 @@ newattrx(Session *p, ViAttr attr, int flags, ViAttrState in, ViStatus (*get)(Ses
 	case ATPTR: a->val = (uintptr_t) in; break;
 	default: assert(0); return nil;
 	}
+	if((flags & ATCALLSET) != 0 && set != nil)
+		set(p, a, in);
 	return a;
 }
 
@@ -102,6 +108,8 @@ newattrs(Session *p, ViAttr attr, int flags, char *in)
 {
 	Attr *a;
 	
+	if((flags & ATIFUNDEF) != 0 && (a = getattr(p, attr, 0), a != nil))
+		return a;
 	a = getattr(p, attr, 1);
 	if(a == nil)
 		return nil;
@@ -227,17 +235,26 @@ static const struct intfdata {
 	{nil, 0},
 };
 
-static const char *classlist[] = {"INSTR", "INTFC", "BACKPLANE", "MEMACC", "SERVANT", "SOCKET", nil};
+static const char *classlist[] = {
+	[CLASS_INSTR] = "INSTR",
+	[CLASS_INTFC] = "INTFC",
+	[CLASS_BACKPLANE] = "BACKPLANE",
+	[CLASS_MEMACC] = "MEMACC",
+	[CLASS_SERVANT] = "SERVANT",
+	[CLASS_SOCKET] = "SOCKET"
+};
 
 static ViStatus
-rsrcparse(char *buf, char **f, int *nf, ViUInt16* ptype, ViUInt16 *pnum, ViString class)
+rsrcparse(char *name, char *buf, RsrcId *id)
 {
+	char **f;
 	const struct intfdata *ip;
-	const char **pp;
 	char *p;
-	int n, brd;
+	int i, n, brd;
 	
-	*nf = n = rsrcsplit(buf, f, *nf);
+	memset(id, 0, sizeof(RsrcId));
+	f = id->f;
+	id->nf = n = rsrcsplit(buf, f, nelem(id->f));
 	if(n < 2) return VI_ERROR_INV_RSRC_NAME;
 	for(ip = interfaces; ip->name != nil; ip++)
 		if(strncasecmp(f[0], ip->name, strlen(ip->name)) == 0)
@@ -252,17 +269,15 @@ rsrcparse(char *buf, char **f, int *nf, ViUInt16* ptype, ViUInt16 *pnum, ViStrin
 		if(*p != 0)
 			return VI_ERROR_INV_RSRC_NAME;
 	}
-	for(pp = classlist; *pp != nil; pp++)
-		if(strcasecmp(f[n-1], *pp) == 0)
+	for(i = 0; i < nelem(classlist); i++)
+		if(strcasecmp(f[n-1], classlist[i]) == 0)
 			break;
-	if(ptype != nil) *ptype = ip->n;
-	if(pnum != nil) *pnum = brd;
-	if(class != nil){
-		if(*pp == nil)
-			strcpy(class, "INSTR");
-		else
-			strcpy(class, *pp);
-	}
+	id->intf = ip->n;
+	id->bnum = brd;
+	if(i == nelem(classlist))
+		id->class = CLASS_INSTR;
+	else
+		id->class = i;
 	return VI_SUCCESS;
 }
 
@@ -277,19 +292,21 @@ ViStatus _VI_FUNC EXPORT
 viParseRsrcEx(ViSession sesn, ViConstRsrc name, ViUInt16* ptype, ViUInt16 *pnum, ViString class, ViString expa, ViString alias)
 {
 	char *buf;
-	char *f[10];
 	Session *p;
-	int rc, nf;
+	int rc;
+	RsrcId id;
 
 	p = vibegin(sesn, SESSDRM);
 	if(p == nil) return VI_ERROR_INV_SESSION;
 	buf = strdup(name);
 	if(buf == nil) return viend(p, VI_ERROR_ALLOC);
-	nf = nelem(f);
-	rc = rsrcparse(buf, f, &nf, ptype, pnum, class);
+	rc = rsrcparse((char*)name, buf, &id);
 	if(rc >= 0){
-		if(expa != nil) strcpy(expa, name);
+		if(ptype != nil) *ptype = id.intf;
+		if(pnum != nil) *pnum = id.bnum;
+		if(expa != nil) snprintf(expa, MAX_ATTR, "%s", id.raw);
 		if(alias != nil) *alias = 0;
+		if(class != nil) snprintf(class, MAX_ATTR, "%s", classlist[id.class]);
 	}
 	free(buf);
 	return viend(p, rc);
@@ -300,17 +317,15 @@ viOpen(ViSession sesn, ViConstRsrc name, ViAccessMode mode, ViUInt32 timeout, Vi
 {
 	Session *drm, *p;
 	const OpTab **tab;
-	char *buf, *f[10];
-	char class[20];
-	ViUInt16 ptype, bnum;
-	int rc, nf;
+	char *buf;
+	int rc;
+	RsrcId id;
 	
 	drm = vibegin(sesn, SESSDRM);
 	if(drm == nil) return VI_ERROR_INV_SESSION;
 	buf = strdup(name);
 	if(buf == nil) return VI_ERROR_ALLOC;
-	nf = nelem(f);
-	rc = rsrcparse(buf, f, &nf, &ptype, &bnum, class);
+	rc = rsrcparse((char*)name, buf, &id);
 	if(rc < 0){
 		free(buf);
 		return viend(drm, rc);
@@ -318,23 +333,49 @@ viOpen(ViSession sesn, ViConstRsrc name, ViAccessMode mode, ViUInt32 timeout, Vi
 	rc = VI_ERROR_RSRC_NFOUND;
 	p = nil;
 	for(tab = optabs; *tab != nil; tab++)
-		if((*tab)->intf == ptype && (*tab)->open != nil){
-			rc = (*tab)->open(drm, f, nf, mode, timeout, &p);
+		if(((*tab)->intf < 0 || (*tab)->intf == id.intf) && ((*tab)->class < 0 || (*tab)->class == id.class) && (*tab)->open != nil){
+			rc = (*tab)->open(drm, &id, mode, timeout, &p);
 			if(rc >= 0)
 				break;
 		}
 	if(rc >= 0){
 		assert(p != nil);
 		p->tab = *tab;
-		newattrs(p, VI_ATTR_RSRC_CLASS, 0, class);
-		newattrs(p, VI_ATTR_RSRC_NAME, 0, (char*)name);
-		newattri(p, VI_ATTR_INTF_TYPE, ATINT16|ATRO, ptype);
-		newattri(p, VI_ATTR_INTF_NUM, ATINT16|ATRO, bnum);
-		newattri(p, VI_ATTR_TMO_VALUE, ATINT32, 2000);
+		newattrs(p, VI_ATTR_RSRC_CLASS, ATIFUNDEF, (char*)classlist[id.class]);
+		newattrs(p, VI_ATTR_RSRC_NAME, ATIFUNDEF, (char*)name);
+		newattri(p, VI_ATTR_INTF_TYPE, ATINT16|ATRO|ATIFUNDEF, id.intf);
+		newattri(p, VI_ATTR_INTF_NUM, ATINT16|ATRO|ATIFUNDEF, id.bnum);
+		newattrs(p, VI_ATTR_INTF_INST_NAME, ATIFUNDEF, "");
 		if(vi != nil) *vi = p->id;
 	}
 	free(buf);
 	return viend(drm, rc);
+}
+
+void
+genericattr(Session *p, char *class)
+{
+	newattri(p, VI_ATTR_TMO_VALUE, ATINT32, 2000);
+	if(strcmp(class, "INSTR") == 0 || strcmp(class, "SOCKET") == 0 || strcmp(class, "INTFC") == 0){
+		newattri(p, VI_ATTR_SEND_END_EN, ATBOOL, 1);
+		newattri(p, VI_ATTR_IO_PROT, ATINT16, VI_PROT_NORMAL);
+		newattri(p, VI_ATTR_TERMCHAR, ATINT8, '\n');
+		newattri(p, VI_ATTR_TERMCHAR_EN, ATBOOL, 0);
+		newattri(p, VI_ATTR_FILE_APPEND_EN, ATBOOL, 0);
+		newattri(p, VI_ATTR_RD_BUF_OPER_MODE, ATINT16, VI_FLUSH_DISABLE);
+		newattri(p, VI_ATTR_WR_BUF_OPER_MODE, ATINT16, VI_FLUSH_DISABLE);
+		newattri(p, VI_ATTR_RD_BUF_SIZE, ATINT32, DEFBUF);
+		newattri(p, VI_ATTR_WR_BUF_SIZE, ATINT32, DEFBUF);
+	}
+	if(strcmp(class, "INSTR") == 0){
+		newattri(p, VI_ATTR_TRIG_ID, ATINT16, VI_TRIG_SW);
+		newattri(p, VI_ATTR_SUPPRESS_END_EN, ATBOOL, 0);
+		newattri(p, VI_ATTR_DMA_ALLOW_EN, ATBOOL, 0);
+	}
+	if(strcmp(class, "INTFC") == 0){
+		newattri(p, VI_ATTR_DEV_STATUS_BYTE, ATINT8, 0);
+		newattri(p, VI_ATTR_DMA_ALLOW_EN, ATBOOL, 0);
+	}
 }
 
 static void
@@ -407,7 +448,7 @@ viGetAttribute(ViSession sesn, ViAttr attr, void *out)
 	case ATINT32: *(ViUInt32*)out = a->val; break;
 	case ATINT64: *(ViUInt64*)out = a->val; break;
 	case ATPTR: *(uintptr_t*)out = a->val; break;
-	case ATSTRING: snprintf(out, 256, "%s", a->str); break;
+	case ATSTRING: snprintf(out, MAX_ATTR, "%s", a->str); break;
 	default: return viend(p, VI_ERROR_SYSTEM_ERROR);
 	}
 	return viend(p, VI_SUCCESS);

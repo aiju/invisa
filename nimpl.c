@@ -314,36 +314,6 @@ viMemFreeEx (ViSession vi, ViBusAddress64 offset)
 #endif
 
 ViStatus EXPORT _VI_FUNC
-viGpibControlREN(ViSession vi, ViUInt16 mode)
-{
-	return VI_ERROR_NIMPL_OPER;
-}
-
-ViStatus EXPORT _VI_FUNC
-viGpibControlATN(ViSession vi, ViUInt16 mode)
-{
-	return VI_ERROR_NIMPL_OPER;
-}
-
-ViStatus EXPORT _VI_FUNC
-viGpibSendIFC (ViSession vi)
-{
-	return VI_ERROR_NIMPL_OPER;
-}
-
-ViStatus EXPORT _VI_FUNC
-viGpibCommand (ViSession vi, ViConstBuf cmd, ViUInt32 cnt, ViPUInt32 retCnt)
-{
-	return VI_ERROR_NIMPL_OPER;
-}
-
-ViStatus EXPORT _VI_FUNC
-viGpibPassControl(ViSession vi, ViUInt16 primAddr, ViUInt16 secAddr)
-{
-	return VI_ERROR_NIMPL_OPER;
-}
-
-ViStatus EXPORT _VI_FUNC
 viVxiCommandQuery(ViSession vi, ViUInt16 mode, ViUInt32 cmd, ViPUInt32 response)
 {
 	return VI_ERROR_NIMPL_OPER;

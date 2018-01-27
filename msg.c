@@ -115,9 +115,9 @@ viStatusDesc(ViObject vi, ViStatus status, ViChar _VI_FAR desc[])
 	
 	for(mp = msgtab; mp->msg != nil; mp++)
 		if(mp->code == status){
-			snprintf(desc, 256, "%s", mp->msg);
+			snprintf(desc, MAX_MSG, "%s", mp->msg);
 			return VI_SUCCESS;
 		}
-	snprintf(desc, 256, "Unknown error (0x%.8x)", status);
+	snprintf(desc, MAX_MSG, "Unknown error (0x%.8x)", (int)status);
 	return VI_WARN_UNKNOWN_STATUS;
 }

@@ -26,6 +26,8 @@ int main()
 	CHECK(viSetAttribute(vi, VI_ATTR_TERMCHAR, '\n'));
 	CHECK(viSetAttribute(vi, VI_ATTR_TERMCHAR_EN, 1));
 	m = sizeof(buf);
+	CHECK(viPrintf(vi, "hello, world\n"));
+	m = sizeof(buf);
 	CHECK(viScanf(vi, "%#s %*s\n", &m, buf));
 	printf("%d %s\n", m, buf);
 }

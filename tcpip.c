@@ -33,16 +33,35 @@ tcpconnect(char *host, char *port)
 }
 
 static ViStatus
-tcpipopen(Session *drm, char **f, int nf, ViAccessMode mode, ViUInt32 timeout, Session **rp)
+tcptimeout(Session *p, Attr *a, ViAttrState in)
+{
+	AuxTCP *q;
+	DWORD time;
+	unsigned long nbl;
+
+	q = p->aux;
+	assert(q != nil);
+	if(q->fd < 0) return VI_ERROR_CONN_LOST;
+	time = in;
+	nbl = in == VI_TMO_IMMEDIATE;
+	time = in == VI_TMO_INFINITE ? 0 : in;
+	ioctlsocket(q->fd, FIONBIO, &nbl);
+	setsockopt(q->fd, SOL_SOCKET, SO_RCVTIMEO, (char*)&time, sizeof(DWORD));
+	setsockopt(q->fd, SOL_SOCKET, SO_SNDTIMEO, (char*)&time, sizeof(DWORD));
+	return VI_SUCCESS;
+}
+
+static ViStatus
+tcpipsocketopen(Session *drm, RsrcId *id, ViAccessMode mode, ViUInt32 timeout, Session **rp)
 {
 	Session *p;
 	AuxTCP *q;
 	int rc;
 	int fd;
 
-	if(nf != 4 || strcmp(f[3], "SOCKET") != 0)
+	if(id->nf != 4)
 		return VI_ERROR_NSUP_OPER;
-	fd = tcpconnect(f[1], f[2]);
+	fd = tcpconnect(id->f[1], id->f[2]);
 	if(fd < 0)
 		return VI_ERROR_RSRC_NFOUND;
 	if(rc = newsession(nil, &p, drm), rc < 0){
@@ -57,14 +76,14 @@ tcpipopen(Session *drm, char **f, int nf, ViAccessMode mode, ViUInt32 timeout, S
 	}
 	q->fd = fd;
 	p->aux = q;
-	newattri(p, VI_ATTR_TERMCHAR, ATINT8, '\n');
-	newattri(p, VI_ATTR_TERMCHAR_EN, ATINT16, 0);
+	genericattr(p, "SOCKET");
+	newattrx(p, VI_ATTR_TMO_VALUE, ATINT32|ATCALLSET, 2000, nil, tcptimeout);
 	*rp = p;
 	return VI_SUCCESS;
 }
 
 static ViStatus
-tcpipread(Session *p, void *v, ViUInt32 n, ViUInt32 *retc)
+tcpipsocketread(Session *p, void *v, ViUInt32 n, ViUInt32 *retc)
 {
 	AuxTCP *q;
 	int rc;
@@ -74,34 +93,61 @@ tcpipread(Session *p, void *v, ViUInt32 n, ViUInt32 *retc)
 	if(q->fd < 0) return VI_ERROR_CONN_LOST;
 	rc = recv(q->fd, v, n, 0);
 	if(rc < 0)
-		switch(errno){
+		switch(WSAGetLastError()){
 		case WSAECONNRESET:
 eof:			close(q->fd);
 			q->fd = -1;
 			return VI_ERROR_CONN_LOST;
+		case WSAETIMEDOUT:
+			return VI_ERROR_TMO;
 		default:
 			return VI_ERROR_IO;
 		}
 	if(rc == 0)
 		goto eof;
-	if(retc != NULL)
+	if(retc != nil)
 		*retc = rc;
 	return VI_SUCCESS;
 }
 
 static ViStatus
-tcpipwrite(Session *p, void *v, ViUInt32 n, ViUInt32 *retc, int end)
+tcpipsocketwrite(Session *p, void *v, ViUInt32 n, ViUInt32 *retc, int end)
 {
-	*retc = fwrite(v, 1, n, stdout);
-	if(end) printf("<END>");
-	fflush(stdout);
+	AuxTCP *q;
+	int rc, i, m;
+	
+	q = p->aux;
+	assert(q != nil);
+	if(q->fd < 0) return VI_ERROR_CONN_LOST;
+	for(i = 0; i < n; ){
+		m = n - i;
+		rc = send(q->fd, (char*)v + i, m, 0);
+		if(rc < 0)
+			switch(WSAGetLastError()){
+			case WSAECONNRESET:
+			case WSAENOTCONN:
+			case WSAENOTSOCK:
+			case WSAESHUTDOWN:
+				close(q->fd);
+				q->fd = -1;
+				return VI_ERROR_CONN_LOST;
+			case WSAETIMEDOUT:
+				return VI_ERROR_TMO;
+			default:
+				return VI_ERROR_IO;
+			}
+		i += rc;
+		if(retc != nil)
+			*retc = i;
+	}
 	return VI_SUCCESS;
 }
 
-const OpTab tcpiptab = {
+const OpTab tcpipsockettab = {
 	.intf = VI_INTF_TCPIP,
-	.open = tcpipopen,
+	.class = CLASS_SOCKET,
+	.open = tcpipsocketopen,
 	.read = iobufread,
-	.rawread = tcpipread,
-	.write = tcpipwrite,
+	.rawread = tcpipsocketread,
+	.write = tcpipsocketwrite,
 };
